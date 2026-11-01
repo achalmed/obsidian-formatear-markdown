@@ -1,0 +1,10 @@
+{
+  "id": "formatear-markdown",
+  "name": "Formatear Markdown",
+  "version": "0.1.0",
+  "minAppVersion": "1.6.0",
+  "description": "Formatea y corrige Markdown con Prettier y markdownlint (al guardar, por documento, carpeta o vault) sin romper la sintaxis de Obsidian.",
+  "author": "achalmed",
+  "authorUrl": "https://github.com/achalmed",
+  "isDesktopOnly": false
+}

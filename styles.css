@@ -1,0 +1,5 @@
+.formatear-markdown-lista {
+  max-height: 40vh;
+  overflow-y: auto;
+  font-size: var(--font-ui-small);
+}
