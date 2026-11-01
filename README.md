@@ -35,16 +35,22 @@ Después de formatear, el complemento compara el antes y el después. Si cambió
 - las palabras y su orden;
 - los enlaces, incrustaciones, etiquetas, resaltados, comentarios, fórmulas, callouts, casillas de tarea, notas al pie
   y campos de Dataview;
+- la cursiva, la negrita, el tachado, el código en línea y los enlaces tal como los lee CommonMark + GFM (micromark):
+  Prettier puede cambiar `*x*` por `_x_`, pero no lo que se ve;
 - el contenido de los bloques de código (salvo los espacios al final de línea) y el frontmatter;
 - los saltos de línea dentro de los párrafos, que en Obsidian se ven: Prettier une a veces dos líneas, por ejemplo
   «texto» seguido de «4. algo», para que no parezca una lista.
 
+Además, los `$` que para Obsidian no son fórmulas (`US$ 45`) se ocultan mientras se formatea: Prettier los leería
+como fórmula y desordenaría el énfasis de alrededor. Y el formato se repite hasta que no cambia, así que formatear dos
+veces da lo mismo que una.
+
 Las plantillas (Templater `<% %>`, Nunjucks `{% %}` y `{{ variable }}` como las de Zotero Integration) se omiten por
 defecto.
 
-Probado sobre 619 notas reales antes de publicar: 417 se formatean, 145 ya estaban en orden, 38 plantillas se omiten
-y 19 (3 %) quedan sin tocar por la red de seguridad: texto pegado de PDF con fórmulas armadas a espacios, una fórmula
-dentro de un elemento de lista vacío, líneas de párrafo que empiezan con un número.
+Usado sobre 365 notas reales: 362 formateadas e idénticas a lo que da el núcleo en Node, 3 sin tocar por la red de
+seguridad (énfasis ambiguo junto a `$`, líneas de párrafo que empiezan con un número) y ninguna cambia en una segunda
+pasada.
 
 ## Ajustes
 

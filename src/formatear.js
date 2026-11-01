@@ -14,6 +14,8 @@ import * as pluginMarkdown from "prettier/plugins/markdown";
 import * as pluginYaml from "prettier/plugins/yaml";
 import { lint } from "markdownlint/sync";
 import { applyFixes } from "markdownlint";
+import { micromark } from "micromark";
+import { gfm, gfmHtml } from "micromark-extension-gfm";
 
 /** Reglas de markdownlint que se corrigen solas, con lo que hacen; `activa` es el valor por defecto. */
 export const REGLAS = {
@@ -191,9 +193,17 @@ const iniciosDeLinea = (texto) =>
         .filter(Boolean)
         .join(" ");
 
+/**
+ * La estructura en línea según CommonMark + GFM (micromark, sin fórmulas, como Obsidian lee `$ 45`): la secuencia de
+ * cursivas, negritas, tachados, código y enlaces. Prettier puede cambiar `*x*` por `_x_`, pero no lo que se ve.
+ */
+const enLinea = (texto) =>
+    (micromark(texto.replace(FRONTMATTER, ""), { extensions: [gfm()], htmlExtensions: [gfmHtml()] }).match(/<\/?(?:em|strong|del|code|a)\b/g) || []).join("");
+
 /** Lo que el formato nunca debe cambiar; cada entrada es [qué, extractor]. */
 const INVARIANTES = [
     ["las palabras y su orden", palabras],
+    ["la cursiva, la negrita, el tachado, el código en línea y los enlaces", enLinea],
     ["los [[enlaces]] e ![[incrustaciones]]", (t) => enlaces(t).join("\n")],
     ["las #etiquetas", (t) => (sinCodigo(t).match(/(?<=^|\s)#[\p{L}\p{N}_/-]*\p{L}[\p{L}\p{N}_/-]*/gu) || []).sort().join(" ")],
     ["los ==resaltados==", (t) => contar(sinCodigo(t), /==/g)],
@@ -207,12 +217,17 @@ const INVARIANTES = [
     ["los bloques de código", (t) => bloquesDeCodigo(t).join("\n\u0000\n")],
 ];
 
-/** Compara antes y después; devuelve la lista de lo que cambió (vacía si todo está bien). */
-export function verificar(antes, despues, op = PREDETERMINADO) {
+/**
+ * Compara antes y después; devuelve la lista de lo que cambió (vacía si todo está bien). La estructura en línea se
+ * compara con `referencia`: el texto tras las correcciones de markdownlint, que la cambian a propósito
+ * (`** negrita **` no es negrita y `**negrita**` sí); así se vigila solo lo que hace Prettier.
+ */
+export function verificar(antes, despues, op = PREDETERMINADO, referencia = antes) {
     const fallos = [];
     for (const [que, extraer] of INVARIANTES) {
         if (que === "las #etiquetas" && op.reglas && op.reglas.MD018) continue;   // MD018 convierte #Título en título
-        if (String(extraer(antes)) !== String(extraer(despues))) fallos.push(que);
+        const base = extraer === enLinea ? referencia : antes;
+        if (String(extraer(base)) !== String(extraer(despues))) fallos.push(que);
     }
     if ((op.ajusteDeLineas || "preserve") === "preserve" && iniciosDeLinea(antes) !== iniciosDeLinea(despues))
         fallos.push("los saltos de línea dentro de los párrafos");
@@ -222,43 +237,77 @@ export function verificar(antes, despues, op = PREDETERMINADO) {
 
 // ── formatear ────────────────────────────────────────────────────────────────────────────────────────────────────
 
+// ── los $ que no son fórmulas ────────────────────────────────────────────────────────────────────────────────────
+// Prettier lee como fórmula `$ 45*, *$` y reordena el énfasis de alrededor; Obsidian no, porque una fórmula en línea
+// abre con $ pegado a lo que sigue y cierra con $ pegado a lo anterior y no seguido de cifra. Los demás $ se ocultan
+// tras un carácter de uso privado mientras se formatea y vuelven al final.
+const DOLAR = "";
+const MATES = /\$\$[\s\S]*?\$\$|(?<!\\)\$(?=[^\s$])(?:\\.|[^$\n\\])*?(?<=[^\s\\])\$(?!\d)/g;
+
+function ocultarDolares(texto) {
+    if (texto.includes(DOLAR)) return texto;
+    let salida = "";
+    let i = 0;
+    const fuera = (t) => t.replace(/(?<!\\)\$/g, DOLAR);
+    for (const m of texto.matchAll(MATES)) {
+        salida += fuera(texto.slice(i, m.index)) + m[0];
+        i = m.index + m[0].length;
+    }
+    return salida + fuera(texto.slice(i));
+}
+
+/** Una pasada completa: corregir, formatear, estilo. */
+async function pasada(texto, op) {
+    let corregidos = 0;
+    for (const p of ["listas", "resto"]) {
+        const paso = corregir(texto, configLint(op, p));
+        texto = paso.texto;
+        corregidos += paso.corregidos;
+    }
+    if (op.prettier) {
+        // Sin el complemento de YAML, Prettier copia el frontmatter tal cual.
+        texto = await prettier.format(texto, {
+            parser: "markdown",
+            plugins: op.frontmatter ? [pluginMarkdown, pluginYaml] : [pluginMarkdown],
+            proseWrap: op.ajusteDeLineas,
+            printWidth: op.anchoDeLinea,
+            useTabs: op.sangriaConTabulador,
+            tabWidth: op.anchoDeTabulador,
+            embeddedLanguageFormatting: "off",
+        });
+        texto = compactarTablas(texto, op);
+    }
+    const estilo = corregir(texto, configLint(op, "estilo"));
+    return { texto: estilo.texto, corregidos: corregidos + estilo.corregidos };
+}
+
 /**
  * Formatea un texto Markdown. Devuelve { texto, cambio, corregidos, error }: si la verificación encuentra algo
- * alterado, `texto` es el original y `error` dice qué se habría roto.
+ * alterado, `texto` es el original y `error` dice qué se habría roto. Repite la pasada hasta que el texto no cambie
+ * (como mucho tres veces), para que formatear dos veces dé lo mismo que una.
  */
 export async function formatear(original, opciones = {}) {
     const op = { ...PREDETERMINADO, ...opciones, reglas: { ...PREDETERMINADO.reglas, ...(opciones.reglas || {}) } };
     const eol = original.includes("\r\n") ? "\r\n" : "\n";
-    let texto = original.replace(/\r\n/g, "\n");
+    let texto = ocultarDolares(original.replace(/\r\n/g, "\n"));
     let corregidos = 0;
+    let referencia = texto;
     try {
-        for (const pasada of ["listas", "resto"]) {
-            const paso = corregir(texto, configLint(op, pasada));
-            texto = paso.texto;
-            corregidos += paso.corregidos;
+        for (const p of ["listas", "resto"]) referencia = corregir(referencia, configLint(op, p)).texto;
+        for (let vuelta = 0; vuelta < 3; vuelta++) {
+            const r = await pasada(texto, op);
+            corregidos += r.corregidos;
+            const estable = r.texto === texto;
+            texto = r.texto;
+            if (estable) break;
         }
-        if (op.prettier) {
-            // Sin el complemento de YAML, Prettier copia el frontmatter tal cual.
-            texto = await prettier.format(texto, {
-                parser: "markdown",
-                plugins: op.frontmatter ? [pluginMarkdown, pluginYaml] : [pluginMarkdown],
-                proseWrap: op.ajusteDeLineas,
-                printWidth: op.anchoDeLinea,
-                useTabs: op.sangriaConTabulador,
-                tabWidth: op.anchoDeTabulador,
-                embeddedLanguageFormatting: "off",
-            });
-            texto = compactarTablas(texto, op);
-        }
-        const paso3 = corregir(texto, configLint(op, "estilo"));
-        texto = paso3.texto;
-        corregidos += paso3.corregidos;
     } catch (e) {
         return { texto: original, cambio: false, corregidos: 0, error: "no se pudo formatear: " + (e.message || e).split("\n")[0] };
     }
+    texto = texto.replaceAll(DOLAR, "$");
     if (eol === "\r\n") texto = texto.replace(/\n/g, "\r\n");
     if (op.sinVerificar) return { texto, cambio: texto !== original, corregidos, error: null };   // solo para diagnosticar
-    const fallos = verificar(original, texto, op);
+    const fallos = verificar(original, texto, op, referencia.replaceAll(DOLAR, "$"));
     if (fallos.length) return { texto: original, cambio: false, corregidos: 0, error: "se habrían alterado " + fallos.join(", ") };
     return { texto, cambio: texto !== original, corregidos, error: null };
 }

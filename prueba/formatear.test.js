@@ -121,3 +121,23 @@ test("revisar lista también lo que no se corrige solo", () => {
     const problemas = revisar("## Sin título principal\n\nTexto con <b>html</b>.\n");
     assert.ok(problemas.some((p) => p.regla === "MD033" && !p.arreglable));
 });
+
+test("un $ que no es fórmula no desordena el énfasis", async () => {
+    const t = "| *US$ 45*, *$ 45* | *USD* |\n| --- | --- |\n";
+    assert.equal(await f(t), "| *US$ 45*, *$ 45* | *USD* |\n| ---------------- | ----- |\n");
+    // `*US$* / *$*` es ambiguo también en Obsidian ($* / *$ cumple sus reglas de fórmula): no se toca.
+    const ambiguo = "*USD* / *US$* / *$*\n";
+    assert.equal((await formatear(ambiguo)).texto, ambiguo);
+    assert.equal(await f("Cuesta *US$ 45*, o *$ 45*; y $x_1$ es fórmula.\n"), "Cuesta *US$ 45*, o *$ 45*; y $x_1$ es fórmula.\n");
+});
+
+test("la verificación detecta el énfasis descuadrado", () => {
+    assert.ok(verificar("*US$ 45*, *$ 45*\n", "*US$ 45_, _$ 45*\n").some((x) => x.startsWith("la cursiva")));
+    assert.deepEqual(verificar("*a* y __b__\n", "_a_ y **b**\n"), [], "cambiar el carácter del énfasis no altera lo que se ve");
+});
+
+test("formatear dos veces da lo mismo que una", async () => {
+    const t = "1.  Pregunta: What is your name?\n    Respuesta: Jhon.\n2.  Otra\n";
+    const una = await f(t, { sangriaConTabulador: true, anchoDeTabulador: 4 });
+    assert.equal(await f(una, { sangriaConTabulador: true, anchoDeTabulador: 4 }), una);
+});
