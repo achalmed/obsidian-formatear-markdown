@@ -1,6 +1,6 @@
 {
   "name": "obsidian-formatear-markdown",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Complemento de Obsidian: formatea y corrige Markdown con Prettier y markdownlint, sin romper la sintaxis de Obsidian.",
   "type": "module",
   "scripts": {
